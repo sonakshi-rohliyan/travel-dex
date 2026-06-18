@@ -1,5 +1,12 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
+
 
 // ─── DESTINATIONS ─────────────────────────────────────────────────────────────
 const DESTINATIONS = [
@@ -354,8 +361,46 @@ const EMPTY_ADD_FORM = {
   itinerary: "", howToGetThere: "",
 };
 
+// ─── helpers to convert between DB row shape and app shape ───────────────────
+function rowToApp(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    region: row.region,
+    tag: row.tag,
+    description: row.description,
+    image: row.image,
+    highlights: Array.isArray(row.highlights) ? row.highlights : [],
+    duration: row.duration,
+    bestFor: row.best_for,
+    avgCost: row.avg_cost,
+    visited: row.visited,
+    itinerary: row.itinerary,
+    howToGetThere: row.how_to_get_there,
+  };
+}
+
+function appToRow(dest) {
+  return {
+    id: dest.id,
+    name: dest.name,
+    region: dest.region,
+    tag: dest.tag,
+    description: dest.description,
+    image: dest.image,
+    highlights: dest.highlights,
+    duration: dest.duration,
+    best_for: dest.bestFor,
+    avg_cost: dest.avgCost,
+    visited: dest.visited,
+    itinerary: dest.itinerary,
+    how_to_get_there: dest.howToGetThere,
+  };
+}
+
 export default function App() {
-  const [destinations, setDestinations] = useState(DESTINATIONS);
+  const [destinations, setDestinations] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [page, setPage]       = useState("home");
   const [selected, setSelected] = useState(null);
   const [regionFilter, setRegionFilter] = useState("All");
@@ -364,6 +409,37 @@ export default function App() {
   const [addForm, setAddForm] = useState(EMPTY_ADD_FORM);
   const [addError, setAddError] = useState("");
 
+  // ── On mount: load from Supabase; seed from DESTINATIONS if table is empty ──
+  useEffect(() => {
+    async function load() {
+      const { data, error } = await supabase
+        .from("destinations")
+        .select("*")
+        .order("id");
+
+      if (error) {
+        console.error("Supabase load error:", error);
+        setDestinations(DESTINATIONS);
+        setLoading(false);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        setDestinations(data.map(rowToApp));
+      } else {
+        // First ever load — seed the table with the hardcoded destinations
+        const rows = DESTINATIONS.map(appToRow);
+        const { error: insertError } = await supabase
+          .from("destinations")
+          .insert(rows);
+        if (insertError) console.error("Seed error:", insertError);
+        setDestinations(DESTINATIONS);
+      }
+      setLoading(false);
+    }
+    load();
+  }, []);
+
   // Live-derived from `destinations` so marking something visited instantly
   // moves it from one list to the other.
   const exploreList = destinations.filter(d => !d.visited);
@@ -371,12 +447,14 @@ export default function App() {
   const exploreRegions = ["All", ...new Set(exploreList.map(d => d.region))];
   const exploreDurations = ["All", ...new Set(exploreList.map(d => d.duration))];
 
-  function markVisited(id) {
+  async function markVisited(id) {
     setDestinations(prev => prev.map(d => (d.id === id ? { ...d, visited: true } : d)));
+    await supabase.from("destinations").update({ visited: true }).eq("id", id);
   }
 
-  function markUnvisited(id) {
+  async function markUnvisited(id) {
     setDestinations(prev => prev.map(d => (d.id === id ? { ...d, visited: false } : d)));
+    await supabase.from("destinations").update({ visited: false }).eq("id", id);
   }
 
   function goHome() {
@@ -391,7 +469,7 @@ export default function App() {
     return e => setAddForm(prev => ({ ...prev, [field]: e.target.value }));
   }
 
-  function submitAddDestination(e) {
+  async function submitAddDestination(e) {
     e.preventDefault();
     const name = addForm.name.trim();
     const region = addForm.region.trim();
@@ -414,10 +492,23 @@ export default function App() {
       itinerary: addForm.itinerary.trim() || "No itinerary added yet — plan it out once you're ready!",
       howToGetThere: addForm.howToGetThere.trim(),
     };
+    const { error } = await supabase.from("destinations").insert([appToRow(newDest)]);
+    if (error) { setAddError("Couldn't save — try again."); return; }
     setDestinations(prev => [...prev, newDest]);
     setAddForm(EMPTY_ADD_FORM);
     setAddError("");
     openDetail(newDest);
+  }
+
+  if (loading) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#f5e6d3", fontFamily: "sans-serif" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "48px", marginBottom: "16px" }}>🕸️</div>
+          <div style={{ fontWeight: 800, fontSize: "18px", color: "#c0392b" }}>Loading your PokéDex...</div>
+        </div>
+      </div>
+    );
   }
 
   const bgStyle = {
